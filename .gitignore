@@ -2,5 +2,14 @@ __pycache__/
 *.pyc
 *.db
 *.log
-.git/
+*.session
+*.session-journal
 .env
+game.html
+gh_error.txt
+gh_output.txt
+run_bot.py
+setup_task.ps1
+start_silent.bat
+start_silent.vbs
+watchdog.py

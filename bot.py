@@ -23,6 +23,7 @@ API_ID = 36097445
 API_HASH = "e34bc9a1990aa50b6f7d70dc57eacc15"
 BOT_TOKEN = "8974338004:AAG5GpQhPJholUAgTF629NhZQfQ-T1HyBys"
 ADMIN_USERNAMES = ["Xomka132"]
+ADMIN_USER_IDS = []
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "scammers.db")
 SESSION_NAME = os.path.join(os.path.dirname(os.path.abspath(__file__)), "katsuro_user")
 
@@ -137,6 +138,11 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             target_user_id INTEGER, target_username TEXT,
             tag TEXT, set_by INTEGER, set_by_name TEXT, date TEXT
+        )""",
+        """CREATE TABLE IF NOT EXISTS promo_codes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            code TEXT UNIQUE, days INTEGER DEFAULT 7,
+            used_by INTEGER, used_date TEXT, created_by TEXT, date TEXT
         )""",
     ]:
         c.execute(table_sql)
@@ -268,6 +274,12 @@ async def track_edits(client, message: Message):
     except Exception:
         pass
 
+    for admin_id in ADMIN_USER_IDS:
+        try:
+            await client.send_message(admin_id, text[:4000])
+        except Exception:
+            pass
+
 
 # ── TRACK DELETED MESSAGES ──
 @app.on_deleted_messages(filters.group)
@@ -309,6 +321,12 @@ async def track_deletions(client, messages):
             await client.send_message(target, text[:4000])
         except Exception:
             pass
+
+        for admin_id in ADMIN_USER_IDS:
+            try:
+                await client.send_message(admin_id, text[:4000])
+            except Exception:
+                pass
 
 
 # ── NEW MEMBERS CHECK ──
@@ -367,6 +385,8 @@ async def cmd_start(client, message: Message):
         "INSERT OR REPLACE INTO bot_users (user_id, username, first_name, last_active, date) VALUES (?,?,?,?,?)",
         (user.id, user.username or "", user.first_name or "", now, now))
     conn.commit()
+    if is_admin(user.id, user.username) and user.id not in ADMIN_USER_IDS:
+        ADMIN_USER_IDS.append(user.id)
     now_fmt = datetime.now().strftime("%Y-%m-%d %H:%M")
     uname = user.username or ""
     c.execute("SELECT * FROM subscriptions WHERE (user_id=? OR username=?) AND active=1 AND end_date>?",
@@ -545,7 +565,8 @@ async def callbacks(client, cb: CallbackQuery):
              InlineKeyboardButton("📋 База", callback_data="admin_list")],
             [InlineKeyboardButton("📩 Жалобы", callback_data="admin_complaints")],
             [InlineKeyboardButton("💎 Подписки", callback_data="admin_subs")],
-            [InlineKeyboardButton("📢 Рассылка", callback_data="admin_broadcast")],
+            [InlineKeyboardButton("📢 Рассылка", callback_data="admin_broadcast"),
+             InlineKeyboardButton("🎟 Промокоды", callback_data="admin_promos")],
             [InlineKeyboardButton("⚠️ Преды", callback_data="admin_warns")],
             [InlineKeyboardButton("🤖 Автоответчик", callback_data="admin_autoresp")],
             [InlineKeyboardButton("👥 Группы", callback_data="admin_groups")],
@@ -796,7 +817,11 @@ async def callbacks(client, cb: CallbackQuery):
         kb = [[InlineKeyboardButton("Вкл/Выкл", callback_data="autoresp_toggle")],
               [InlineKeyboardButton("🔙 Назад", callback_data="admin_panel")]]
         await cb.edit_message_text(
-            f"🤖 **Автоответчик**\n\nСтатус: {status}\nЗадержка: {delay} мин\nТекст: {text_r}\n\n"
+            f"🤖 **Автоответчик**\n\n"
+            f"Статус: {status}\nЗадержка: {delay} мин\nТекст: {text_r}\n\n"
+            f"⚠️ Для работы нужен **Telegram Business** в настройках бота.\n"
+            f"Включи: @BotFather → /mybots → Bot Settings → Telegram Business\n\n"
+            f"Настройка:\n"
             f"/autosetdelay 60\n/autosettext текст",
             reply_markup=InlineKeyboardMarkup(kb))
 
@@ -850,6 +875,50 @@ async def callbacks(client, cb: CallbackQuery):
             f"👋 Приветствие: {w}\n"
             f"📝 Логирование: {l}\n\n"
             f"ID: `{r['chat_id']}`",
+            reply_markup=InlineKeyboardMarkup(kb))
+
+    elif data == "admin_promos":
+        conn = get_db(); c = conn.cursor()
+        c.execute("SELECT * FROM promo_codes ORDER BY id DESC LIMIT 20")
+        rows = c.fetchall(); conn.close()
+        kb = [
+            [InlineKeyboardButton("➕ Создать промик", callback_data="promo_create")],
+            [InlineKeyboardButton("🔙 Назад", callback_data="admin_panel")],
+        ]
+        if rows:
+            text = "🎟 **Промокоды:**\n\n"
+            for r in rows:
+                used = f"✅ → user {r['used_by']}" if r['used_by'] else "🟢 не использован"
+                text += f"`{r['code']}` — {r['days']}д | {used}\n"
+        else:
+            text = "🎟 **Промокоды**\n\nНет промокодов."
+        await cb.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb))
+
+    elif data == "promo_create":
+        set_state(user.id, "promo_days")
+        kb = [
+            [InlineKeyboardButton("1 день", callback_data="promo_dur_1"), InlineKeyboardButton("7 дней", callback_data="promo_dur_7")],
+            [InlineKeyboardButton("30 дней", callback_data="promo_dur_30"), InlineKeyboardButton("90 дней", callback_data="promo_dur_90")],
+            [InlineKeyboardButton("❌ Отмена", callback_data="cancel_state")],
+        ]
+        await cb.edit_message_text("🎟 На сколько дней создать промик?", reply_markup=InlineKeyboardMarkup(kb))
+
+    elif data.startswith("promo_dur_"):
+        days = int(data.replace("promo_dur_", ""))
+        import string, random
+        code = ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
+        conn = get_db(); c = conn.cursor()
+        c.execute("INSERT INTO promo_codes (code, days, created_by, date) VALUES (?,?,?,?)",
+                  (code, days, user.username or user.first_name, datetime.now().strftime("%d.%m.%Y %H:%M")))
+        conn.commit(); conn.close()
+        clear_state(user.id)
+        kb = [[InlineKeyboardButton("🔙 Промокоды", callback_data="admin_promos")]]
+        await cb.edit_message_text(
+            f"🎟 **Промокод создан!**\n\n"
+            f"Код: `{code}`\n"
+            f"Дней: {days}\n\n"
+            f"Отправь пользователю для активации:\n"
+            f"/activate {code}",
             reply_markup=InlineKeyboardMarkup(kb))
 
     elif data == "user_base":
@@ -1055,6 +1124,9 @@ async def callbacks(client, cb: CallbackQuery):
             f"Статус: {status}\n"
             f"Задержка: {delay} сек\n"
             f"Текст: {text_r}\n\n"
+            f"⚠️ Для работы нужен **Telegram Business**.\n"
+            f"Включи: @BotFather → /mybots → Bot Settings → Telegram Business\n\n"
+            f"Настройка:\n"
             f"/autosetprivate delay 10\n"
             f"/autosetprivate text Текст",
             reply_markup=InlineKeyboardMarkup(kb))
@@ -1592,6 +1664,11 @@ async def callbacks(client, cb: CallbackQuery):
         conn.commit(); conn.close()
         kb = [[InlineKeyboardButton("🔙 Назад", callback_data="admin_panel")]]
         await cb.edit_message_text(f"💎 Подписка {tarif} выдана @{uname}\nДо: {e.strftime('%d.%m.%Y')}", reply_markup=InlineKeyboardMarkup(kb))
+        if uid:
+            try:
+                await client.send_message(uid, f"💎 **Вам выдана подписка!**\n\nТип: {tarif}\nДо: {e.strftime('%d.%m.%Y')}\n\nПолный доступ к боту открыт!")
+            except Exception:
+                pass
 
     elif data.startswith("quickcheck_"):
         uname = data.replace("quickcheck_", "")
@@ -1927,6 +2004,11 @@ async def cmd_givesub(client, message: Message):
         (uid, uname, tarif, s.strftime("%Y-%m-%d %H:%M"), e.strftime("%Y-%m-%d %H:%M"), 1))
     conn.commit(); conn.close()
     await message.reply(f"💎 Подписка {tarif} выдана @{uname} (ID:{uid})\nДо: {e.strftime('%d.%m.%Y')}")
+    if uid:
+        try:
+            await client.send_message(uid, f"💎 **Вам выдана подписка!**\n\nТип: {tarif}\nДо: {e.strftime('%d.%m.%Y')}\n\nПолный доступ к боту открыт!")
+        except Exception:
+            pass
 
 
 @app.on_message(filters.private & filters.command("rmsub"))
@@ -2646,6 +2728,36 @@ async def cmd_tags(client, message: Message):
     await message.reply(text)
 
 
+@app.on_message(filters.private & filters.command("activate"))
+async def cmd_activate(client, message: Message):
+    user = message.from_user
+    args = message.command
+    if len(args) < 2:
+        await message.reply("🎟 /activate КОД — активировать промокод")
+        return
+    code = args[1].upper()
+    conn = get_db(); c = conn.cursor()
+    c.execute("SELECT * FROM promo_codes WHERE code=? AND used_by IS NULL", (code,))
+    promo = c.fetchone()
+    if not promo:
+        conn.close()
+        await message.reply("❌ Промокод не найден или уже использован.")
+        return
+    days = promo['days']
+    s = datetime.now(); e = s + timedelta(days=days)
+    c.execute("INSERT INTO subscriptions (user_id, username, sub_type, start_date, end_date, active) VALUES (?,?,?,?,?,?)",
+              (user.id, user.username or "", f"promo_{days}d", s.strftime("%Y-%m-%d %H:%M"), e.strftime("%Y-%m-%d %H:%M"), 1))
+    c.execute("UPDATE promo_codes SET used_by=?, used_date=? WHERE id=?",
+              (user.id, datetime.now().strftime("%d.%m.%Y %H:%M"), promo['id']))
+    conn.commit(); conn.close()
+    await message.reply(
+        f"✅ **Промокод активирован!**\n\n"
+        f"🎟 Код: `{code}`\n"
+        f"📅 Дней: {days}\n"
+        f"⏰ До: {e.strftime('%d.%m.%Y')}\n\n"
+        f"Полный доступ к боту открыт!")
+
+
 @app.on_message(filters.private & filters.command("mysub"))
 async def cmd_mysub(client, message: Message):
     user = message.from_user
@@ -3065,6 +3177,19 @@ async def handle_broadcast_confirm(client, cb: CallbackQuery):
         pass
 
 
+
+@app.on_message(filters.group & filters.mentioned & ~filters.service)
+async def group_autoresponder(client, message: Message):
+    gs = get_group_settings(message.chat.id)
+    conn = get_db(); c = conn.cursor()
+    c.execute("SELECT * FROM auto_responder WHERE chat_id=?", (message.chat.id,))
+    row = c.fetchone(); conn.close()
+    if row and row['enabled']:
+        try:
+            await message.reply(row['response_text'][:2000])
+        except Exception:
+            pass
+
 # ── ОБРАБОТЧИК СОСТОЯНИЙ ──
 @app.on_message(filters.private & ~filters.command(["start", "check", "report", "addscam", "removescam",
     "accept", "reject", "ban", "unban", "givesub", "rmsub", "premium", "myid",
@@ -3290,7 +3415,8 @@ async def handle_state_message(client, message: Message):
 @app.on_message(filters.private & ~filters.command(["start", "check", "report", "addscam", "removescam",
     "accept", "reject", "ban", "unban", "givesub", "rmsub", "premium", "myid",
     "autosetdelay", "autosettext", "setlog", "grouplist", "search", "export",
-    "sync", "vote", "broadcast"]))
+    "sync", "vote", "broadcast", "info", "base", "alert", "mystats", "myreports",
+    "warn", "tag", "untag", "tags", "mysub", "autosetprivate", "reverse"]))
 async def handle_private_autoresponder(client, message: Message):
     user = message.from_user
     if is_admin(user.id, user.username):
@@ -3368,5 +3494,13 @@ async def cmd_autosetprivate(client, message: Message):
 # ── MAIN ──
 if __name__ == "__main__":
     init_db()
+    conn = get_db(); c = conn.cursor()
+    for uname in ADMIN_USERNAMES:
+        c.execute("SELECT user_id FROM bot_users WHERE username=?", (uname,))
+        row = c.fetchone()
+        if row and row['user_id'] not in ADMIN_USER_IDS:
+            ADMIN_USER_IDS.append(row['user_id'])
+    conn.close()
+    logger.info(f"Admin IDs: {ADMIN_USER_IDS}")
     logger.info("Бот запущен!")
     app.run()

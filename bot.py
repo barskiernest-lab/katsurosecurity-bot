@@ -158,6 +158,26 @@ def is_admin(user_id, username=None):
 
 
 user_states = {}
+_processed_msgs = set()
+_processed_cbs = set()
+
+def is_duplicate_msg(message_id):
+    key = message_id
+    if key in _processed_msgs:
+        return True
+    _processed_msgs.add(key)
+    if len(_processed_msgs) > 5000:
+        _processed_msgs.clear()
+    return False
+
+def is_duplicate_cb(cb_id):
+    key = cb_id
+    if key in _processed_cbs:
+        return True
+    _processed_cbs.add(key)
+    if len(_processed_cbs) > 5000:
+        _processed_cbs.clear()
+    return False
 
 
 def set_state(user_id, state, data=None):
@@ -383,6 +403,8 @@ async def check_new_members(client, message: Message):
 # ── PRIVATE: START ──
 @app.on_message(filters.private & filters.command("start"))
 async def cmd_start(client, message: Message):
+    if is_duplicate_msg(message.id):
+        return
     user = message.from_user
     conn = get_db()
     c = conn.cursor()
@@ -468,6 +490,8 @@ async def cmd_start(client, message: Message):
 # ── CALLBACKS ──
 @app.on_callback_query()
 async def callbacks(client, cb: CallbackQuery):
+    if is_duplicate_cb(cb.id):
+        return
     user = cb.from_user
     data = cb.data
 
@@ -2237,6 +2261,8 @@ async def cmd_vote(client, message: Message):
 
 @app.on_callback_query(filters.regex(r"^vote_(yes|no)_(\d+)$"), group=-1)
 async def handle_vote(client, cb: CallbackQuery):
+    if is_duplicate_cb(cb.id):
+        return
     await cb.stop_propagation()
     data = cb.data.split("_")
     choice = data[1]
@@ -3007,6 +3033,8 @@ async def cmd_sync(client, message: Message):
 
 @app.on_message(filters.forwarded & filters.private)
 async def handle_forwarded(client, message: Message):
+    if is_duplicate_msg(message.id):
+        return
     await message.stop_propagation()
     user = message.from_user
     if not is_admin(user.id, user.username):
@@ -3196,6 +3224,8 @@ async def cmd_broadcast(client, message: Message):
 
 @app.on_callback_query(filters.regex(r"^broadcast_(yes|no)$"), group=-1)
 async def handle_broadcast_confirm(client, cb: CallbackQuery):
+    if is_duplicate_cb(cb.id):
+        return
     await cb.stop_propagation()
     action = cb.data.split("_")[1]
     if action == "no":
@@ -3258,6 +3288,8 @@ async def group_autoresponder(client, message: Message):
     "sync", "vote", "broadcast", "info", "base", "alert", "mystats", "myreports",
     "warn", "tag", "untag", "tags", "mysub", "autosetprivate", "reverse", "activate"]))
 async def handle_state_message(client, message: Message):
+    if is_duplicate_msg(message.id):
+        return
     user = message.from_user
     state_info = get_state(user.id)
     if not state_info:

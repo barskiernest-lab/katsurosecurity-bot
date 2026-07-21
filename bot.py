@@ -491,10 +491,22 @@ async def callbacks(client, cb: CallbackQuery):
         await cb.edit_message_text("Главное меню:", reply_markup=InlineKeyboardMarkup(kb))
 
     elif data == "check":
-        await cb.edit_message_text("🔍 /check @username | /check ID | реплай: /check")
+        if sub_required(user):
+            kb = [[InlineKeyboardButton("📋 Купить подписку", callback_data="buy_sub")]]
+            await cb.edit_message_text("🔒 Нужна подписка!", reply_markup=InlineKeyboardMarkup(kb))
+            return
+        set_state(user.id, "user_check")
+        kb = [[InlineKeyboardButton("❌ Отмена", callback_data="cancel_state")]]
+        await cb.edit_message_text("🔍 Введите @username или ID для проверки:", reply_markup=InlineKeyboardMarkup(kb))
 
     elif data == "report":
-        await cb.edit_message_text("🚨 /report @username причина | реплай: /report причина")
+        if sub_required(user):
+            kb = [[InlineKeyboardButton("📋 Купить подписку", callback_data="buy_sub")]]
+            await cb.edit_message_text("🔒 Нужна подписка!", reply_markup=InlineKeyboardMarkup(kb))
+            return
+        set_state(user.id, "user_report_user")
+        kb = [[InlineKeyboardButton("❌ Отмена", callback_data="cancel_state")]]
+        await cb.edit_message_text("🚨 Введите @username мошенника:", reply_markup=InlineKeyboardMarkup(kb))
 
     elif data == "premium_menu":
         conn = get_db()
@@ -1392,30 +1404,19 @@ async def callbacks(client, cb: CallbackQuery):
             reply_markup=InlineKeyboardMarkup(kb))
 
     elif data == "reverse_phone":
-        await cb.edit_message_text(
-            "📱 **Поиск по номеру**\n\n"
-            "Напишите: /reverse +7XXXXXXXXXX\n"
-            "или: /reverse 79161234567",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔙 Назад", callback_data="reverse_menu")]
-            ]))
+        set_state(user.id, "user_reverse_phone")
+        kb = [[InlineKeyboardButton("❌ Отмена", callback_data="cancel_state")]]
+        await cb.edit_message_text("📱 **Поиск по номеру**\n\nВведите номер телефона:", reply_markup=InlineKeyboardMarkup(kb))
 
     elif data == "reverse_username":
-        await cb.edit_message_text(
-            "👤 **Поиск по юзернейму**\n\n"
-            "Напишите: /reverse @username\n"
-            "или: /reverse username",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔙 Назад", callback_data="reverse_menu")]
-            ]))
+        set_state(user.id, "user_reverse_username")
+        kb = [[InlineKeyboardButton("❌ Отмена", callback_data="cancel_state")]]
+        await cb.edit_message_text("👤 **Поиск по юзернейму**\n\nВведите @username:", reply_markup=InlineKeyboardMarkup(kb))
 
     elif data == "reverse_id":
-        await cb.edit_message_text(
-            "🆔 **Поиск по ID**\n\n"
-            "Напишите: /reverse 123456789",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔙 Назад", callback_data="reverse_menu")]
-            ]))
+        set_state(user.id, "user_reverse_id")
+        kb = [[InlineKeyboardButton("❌ Отмена", callback_data="cancel_state")]]
+        await cb.edit_message_text("🆔 **Поиск по ID**\n\nВведите Telegram ID:", reply_markup=InlineKeyboardMarkup(kb))
 
     elif data == "search_by_name":
         await cb.edit_message_text("🔍 Введите: /search имя_или_ID")
@@ -1603,10 +1604,11 @@ async def callbacks(client, cb: CallbackQuery):
         await cb.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb))
 
     elif data == "alert_add":
+        set_state(user.id, "user_alert_add")
+        kb = [[InlineKeyboardButton("❌ Отмена", callback_data="cancel_state")]]
         await cb.edit_message_text(
-            "🔔 **Добавить оповещение**\n\n"
-            "Напишите: /alert @username\n"
-            "Когда его проверят — вы узнаете!")
+            "🔔 **Добавить оповещение**\n\nВведите @username:",
+            reply_markup=InlineKeyboardMarkup(kb))
 
     elif data == "my_alerts_list":
         conn = get_db()
@@ -1620,13 +1622,34 @@ async def callbacks(client, cb: CallbackQuery):
         text = "🔔 **Мои оповещения:**\n\n"
         for r in rows:
             text += f"• @{r['target_username']}\n"
-        text += "\nОтключить: /alert off @user"
-        await cb.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb))
+        kb2 = [[InlineKeyboardButton("❌ Отключить", callback_data="alert_off_prompt")],
+               [InlineKeyboardButton("🔙 Назад", callback_data="alerts_menu")]]
+        await cb.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb2))
 
     elif data == "cancel_state":
         clear_state(user.id)
-        kb = [[InlineKeyboardButton("🔙 Назад", callback_data="admin_panel")]]
-        await cb.edit_message_text("❌ Действие отменено.", reply_markup=InlineKeyboardMarkup(kb))
+        kb = [
+            [InlineKeyboardButton("🔍 Проверить", callback_data="check"),
+             InlineKeyboardButton("🚨 Жалоба", callback_data="report")],
+            [InlineKeyboardButton("📋 База скамеров", callback_data="user_base"),
+             InlineKeyboardButton("🔍 Поиск", callback_data="search_menu")],
+            [InlineKeyboardButton("🔔 Оповещения", callback_data="alerts_menu"),
+             InlineKeyboardButton("📊 Статистика", callback_data="stats")],
+            [InlineKeyboardButton("📝 Мои жалобы", callback_data="my_reports"),
+             InlineKeyboardButton("👤 Профиль", callback_data="my_profile")],
+            [InlineKeyboardButton("🤖 Автоответчик", callback_data="user_autoresp"),
+             InlineKeyboardButton("ℹ️ Инфо", callback_data="info_detail")],
+            [InlineKeyboardButton("⭐ Premium", callback_data="premium_menu"),
+             InlineKeyboardButton("📋 Подписка", callback_data="my_sub")],
+        ]
+        if is_admin(user.id, user.username):
+            kb.append([InlineKeyboardButton("⚙️ Админ", callback_data="admin_panel")])
+        await cb.edit_message_text("Главное меню:", reply_markup=InlineKeyboardMarkup(kb))
+
+    elif data == "alert_off_prompt":
+        set_state(user.id, "user_alert_off")
+        kb = [[InlineKeyboardButton("❌ Отмена", callback_data="cancel_state")]]
+        await cb.edit_message_text("🔔 Введите @username для отключения оповещения:", reply_markup=InlineKeyboardMarkup(kb))
 
     elif data == "broadcast_confirm":
         state_info = get_state(user.id)
@@ -3458,6 +3481,182 @@ async def handle_state_message(client, message: Message):
             await message.reply(f"🗑 Все метки @{uname} удалены.", reply_markup=InlineKeyboardMarkup(kb))
         else:
             await message.reply(f"❌ У @{uname} нет меток.", reply_markup=InlineKeyboardMarkup(kb))
+
+    elif state == "user_check":
+        clear_state(user.id)
+        arg = text.lstrip("@").strip()
+        if not arg:
+            kb = [[InlineKeyboardButton("🔙 Назад", callback_data="back_main")]]
+            await message.reply("❌ Введите @username или ID", reply_markup=InlineKeyboardMarkup(kb)); return
+        conn = get_db(); c = conn.cursor()
+        row = None
+        if arg.isdigit():
+            c.execute("SELECT * FROM scammers WHERE user_id=?", (int(arg),))
+            row = c.fetchone()
+        if not row:
+            c.execute("SELECT * FROM scammers WHERE username=?", (arg,))
+            row = c.fetchone()
+        now = datetime.now().strftime("%d.%m.%Y %H:%M")
+        result = "scammer" if row else "clean"
+        checked_name = f"@{arg}" if not arg.isdigit() else f"ID:{arg}"
+        c.execute("INSERT INTO check_history (user_id, checked_username, result, date) VALUES (?,?,?,?)",
+                  (user.id, checked_name, result, now))
+        if row:
+            c.execute("SELECT user_id FROM user_alerts WHERE target_username=? AND active=1", (arg,))
+            for au in c.fetchall():
+                try:
+                    await client.send_message(au["user_id"],
+                        f"🔔 **ОПОВЕЩЕНИЕ**\n\nПользователь @{arg} проверен — **СКАМЕР**!\n"
+                        f"📝 {row['reason']}\n📅 {row['date']}")
+                except Exception:
+                    pass
+        conn.commit(); conn.close()
+        if row:
+            u = f"@{row['username']}" if row['username'] else f"ID: {row['user_id']}"
+            tag_conn = get_db(); tc = tag_conn.cursor()
+            tag_emojis = {"мошенник": "🔴", "скамер": "🔴", "подозреваемый": "🟡", "проверенный": "🟢", "чисто": "🟢", "под подозрением": "🟡"}
+            tc.execute("SELECT tag FROM user_tags WHERE target_username=?", (arg,))
+            tags = tc.fetchall(); tag_conn.close()
+            tag_line = ""
+            if tags:
+                tag_line = "\n🏷 " + " ".join(f"{tag_emojis.get(t['tag'], '⚪')} {t['tag']}" for t in tags)
+            kb = [[InlineKeyboardButton("🚨 Пожаловаться", callback_data="report")],
+                  [InlineKeyboardButton("🔙 Назад", callback_data="back_main")]]
+            await message.reply(
+                f"🚨 **СКАМЕР**\n\n👤 {u} ({row['first_name']})\n"
+                f"📝 {row['reason']}\n👮 {row['added_by_name']}\n📅 {row['date']}{tag_line}",
+                reply_markup=InlineKeyboardMarkup(kb))
+        else:
+            kb = [[InlineKeyboardButton("🚨 Пожаловаться", callback_data="report")],
+                  [InlineKeyboardButton("🔙 Назад", callback_data="back_main")]]
+            await message.reply(f"✅ @{arg} — чисто.", reply_markup=InlineKeyboardMarkup(kb))
+
+    elif state == "user_report_user":
+        uname = text.lstrip("@").strip()
+        if not uname:
+            clear_state(user.id)
+            kb = [[InlineKeyboardButton("🔙 Назад", callback_data="back_main")]]
+            await message.reply("❌ Введите @username", reply_markup=InlineKeyboardMarkup(kb)); return
+        set_state(user.id, "user_report_reason", {"username": uname})
+        kb = [[InlineKeyboardButton("❌ Отмена", callback_data="cancel_state")]]
+        await message.reply(f"🚨 Введите причину жалобы на @{uname}:", reply_markup=InlineKeyboardMarkup(kb))
+
+    elif state == "user_report_reason":
+        uname = state_info["data"]["username"]
+        reason = text.strip()
+        clear_state(user.id)
+        if not reason:
+            kb = [[InlineKeyboardButton("🔙 Назад", callback_data="back_main")]]
+            await message.reply("❌ Введите причину", reply_markup=InlineKeyboardMarkup(kb)); return
+        conn = get_db(); c = conn.cursor()
+        c.execute("SELECT user_id FROM bot_users WHERE username=?", (uname,))
+        r = c.fetchone()
+        uid = r['user_id'] if r else 0
+        c.execute("INSERT INTO complaints (reporter_id, reporter_name, target_user_id, target_username, target_name, reason, status, date) VALUES (?,?,?,?,?,?,?,?)",
+                  (user.id, user.username or user.first_name, uid, uname, "", reason, "pending",
+                   datetime.now().strftime("%d.%m.%Y %H:%M")))
+        conn.commit(); conn.close()
+        kb = [[InlineKeyboardButton("🔙 Назад", callback_data="back_main")]]
+        await message.reply(f"✅ Жалоба на @{uname} отправлена на модерацию.\n📝 {reason}", reply_markup=InlineKeyboardMarkup(kb))
+        for admin_id in ADMIN_USER_IDS:
+            try:
+                await client.send_message(admin_id,
+                    f"📩 **НОВАЯ ЖАЛОБА**\n\n👤 @{uname}\n📝 {reason}\n👮 От: @{user.username or user.id}")
+            except Exception:
+                pass
+
+    elif state == "user_alert_add":
+        uname = text.lstrip("@").strip()
+        clear_state(user.id)
+        if not uname:
+            kb = [[InlineKeyboardButton("🔙 Назад", callback_data="back_main")]]
+            await message.reply("❌ Введите @username", reply_markup=InlineKeyboardMarkup(kb)); return
+        conn = get_db(); c = conn.cursor()
+        c.execute("SELECT * FROM user_alerts WHERE user_id=? AND target_username=? AND active=1", (user.id, uname))
+        if c.fetchone():
+            conn.close()
+            kb = [[InlineKeyboardButton("🔙 Назад", callback_data="alerts_menu")]]
+            await message.reply(f"🔔 Уже следите за @{uname}!", reply_markup=InlineKeyboardMarkup(kb)); return
+        c.execute("INSERT INTO user_alerts (user_id, target_username, date) VALUES (?,?,?)",
+                  (user.id, uname, datetime.now().strftime("%d.%m.%Y %H:%M")))
+        conn.commit(); conn.close()
+        kb = [[InlineKeyboardButton("🔙 Оповещения", callback_data="alerts_menu")]]
+        await message.reply(f"🔔 Теперь следите за @{uname}! Уведомление при проверке.", reply_markup=InlineKeyboardMarkup(kb))
+
+    elif state == "user_alert_off":
+        uname = text.lstrip("@").strip()
+        clear_state(user.id)
+        if not uname:
+            kb = [[InlineKeyboardButton("🔙 Назад", callback_data="back_main")]]
+            await message.reply("❌ Введите @username", reply_markup=InlineKeyboardMarkup(kb)); return
+        conn = get_db(); c = conn.cursor()
+        c.execute("UPDATE user_alerts SET active=0 WHERE user_id=? AND target_username=?", (user.id, uname))
+        d = c.rowcount; conn.commit(); conn.close()
+        kb = [[InlineKeyboardButton("🔙 Оповещения", callback_data="alerts_menu")]]
+        if d:
+            await message.reply(f"🔔 Оповещение @{uname} отключено.", reply_markup=InlineKeyboardMarkup(kb))
+        else:
+            await message.reply(f"❌ Оповещение @{uname} не найдено.", reply_markup=InlineKeyboardMarkup(kb))
+
+    elif state == "user_reverse_phone":
+        query = text.strip()
+        clear_state(user.id)
+        if not query:
+            kb = [[InlineKeyboardButton("🔙 Назад", callback_data="reverse_menu")]]
+            await message.reply("❌ Введите номер телефона", reply_markup=InlineKeyboardMarkup(kb)); return
+        await message.reply("🔍 Ищу...")
+        try:
+            target_user = await client.get_users(query)
+        except Exception:
+            target_user = None
+        if target_user:
+            kb = [[InlineKeyboardButton("🔙 Назад", callback_data="back_main")]]
+            await message.reply(
+                f"📱 **Найден**\n\n👤 {target_user.first_name}\n🆔 `{target_user.id}`\n📛 @{target_user.username or 'нет'}",
+                reply_markup=InlineKeyboardMarkup(kb))
+        else:
+            kb = [[InlineKeyboardButton("🔙 Назад", callback_data="back_main")]]
+            await message.reply("❌ Пользователь не найден", reply_markup=InlineKeyboardMarkup(kb))
+
+    elif state == "user_reverse_username":
+        uname = text.lstrip("@").strip()
+        clear_state(user.id)
+        if not uname:
+            kb = [[InlineKeyboardButton("🔙 Назад", callback_data="reverse_menu")]]
+            await message.reply("❌ Введите @username", reply_markup=InlineKeyboardMarkup(kb)); return
+        await message.reply("🔍 Ищу...")
+        try:
+            target_user = await client.get_users(uname)
+        except Exception:
+            target_user = None
+        if target_user:
+            kb = [[InlineKeyboardButton("🔙 Назад", callback_data="back_main")]]
+            await message.reply(
+                f"👤 **Найден**\n\n👤 {target_user.first_name}\n🆔 `{target_user.id}`\n📛 @{target_user.username or 'нет'}",
+                reply_markup=InlineKeyboardMarkup(kb))
+        else:
+            kb = [[InlineKeyboardButton("🔙 Назад", callback_data="back_main")]]
+            await message.reply("❌ Пользователь не найден", reply_markup=InlineKeyboardMarkup(kb))
+
+    elif state == "user_reverse_id":
+        clear_state(user.id)
+        if not text.strip().isdigit():
+            kb = [[InlineKeyboardButton("🔙 Назад", callback_data="reverse_menu")]]
+            await message.reply("❌ Введите числовой ID", reply_markup=InlineKeyboardMarkup(kb)); return
+        uid = int(text.strip())
+        await message.reply("🔍 Ищу...")
+        try:
+            target_user = await client.get_users(uid)
+        except Exception:
+            target_user = None
+        if target_user:
+            kb = [[InlineKeyboardButton("🔙 Назад", callback_data="back_main")]]
+            await message.reply(
+                f"🆔 **Найден**\n\n👤 {target_user.first_name}\n🆔 `{target_user.id}`\n📛 @{target_user.username or 'нет'}",
+                reply_markup=InlineKeyboardMarkup(kb))
+        else:
+            kb = [[InlineKeyboardButton("🔙 Назад", callback_data="back_main")]]
+            await message.reply("❌ Пользователь не найден", reply_markup=InlineKeyboardMarkup(kb))
 
     else:
         clear_state(user.id)

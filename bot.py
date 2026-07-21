@@ -17,7 +17,6 @@ from pyrogram.types import (
     Message, CallbackQuery
 )
 from pyrogram.errors import FloodWait
-import asyncio
 
 API_ID = 36097445
 API_HASH = "e34bc9a1990aa50b6f7d70dc57eacc15"
@@ -151,6 +150,8 @@ def init_db():
 
 
 def is_admin(user_id, username=None):
+    if user_id in ADMIN_USER_IDS:
+        return True
     if username and username in ADMIN_USERNAMES:
         return True
     return False
@@ -352,8 +353,10 @@ async def check_new_members(client, message: Message):
             conn = get_db()
             c = conn.cursor()
             uname = member.username or ""
-            c.execute("SELECT * FROM scammers WHERE username=?", (uname,))
-            scam = c.fetchone()
+            scam = None
+            if uname:
+                c.execute("SELECT * FROM scammers WHERE username=?", (uname,))
+                scam = c.fetchone()
             if not scam:
                 c.execute("SELECT * FROM scammers WHERE user_id=?", (member.id,))
                 scam = c.fetchone()
@@ -895,7 +898,6 @@ async def callbacks(client, cb: CallbackQuery):
         await cb.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb))
 
     elif data == "promo_create":
-        set_state(user.id, "promo_days")
         kb = [
             [InlineKeyboardButton("1 день", callback_data="promo_dur_1"), InlineKeyboardButton("7 дней", callback_data="promo_dur_7")],
             [InlineKeyboardButton("30 дней", callback_data="promo_dur_30"), InlineKeyboardButton("90 дней", callback_data="promo_dur_90")],
@@ -911,7 +913,6 @@ async def callbacks(client, cb: CallbackQuery):
         c.execute("INSERT INTO promo_codes (code, days, created_by, date) VALUES (?,?,?,?)",
                   (code, days, user.username or user.first_name, datetime.now().strftime("%d.%m.%Y %H:%M")))
         conn.commit(); conn.close()
-        clear_state(user.id)
         kb = [[InlineKeyboardButton("🔙 Промокоды", callback_data="admin_promos")]]
         await cb.edit_message_text(
             f"🎟 **Промокод создан!**\n\n"
@@ -1437,9 +1438,17 @@ async def callbacks(client, cb: CallbackQuery):
     elif data == "search_7d":
         conn = get_db()
         c = conn.cursor()
-        since = (datetime.now() - timedelta(days=7)).strftime("%d.%m.%Y")
-        c.execute("SELECT * FROM scammers WHERE date >= ? ORDER BY id DESC", (since,))
-        rows = c.fetchall(); conn.close()
+        c.execute("SELECT * FROM scammers ORDER BY id DESC")
+        all_rows = c.fetchall(); conn.close()
+        cutoff = datetime.now() - timedelta(days=7)
+        rows = []
+        for r in all_rows:
+            try:
+                d = datetime.strptime(r['date'], "%d.%m.%Y %H:%M")
+                if d >= cutoff:
+                    rows.append(r)
+            except Exception:
+                pass
         if not rows:
             await cb.edit_message_text("🔍 За 7 дней: ничего не найдено.")
             return
@@ -1453,9 +1462,17 @@ async def callbacks(client, cb: CallbackQuery):
     elif data == "search_30d":
         conn = get_db()
         c = conn.cursor()
-        since = (datetime.now() - timedelta(days=30)).strftime("%d.%m.%Y")
-        c.execute("SELECT * FROM scammers WHERE date >= ? ORDER BY id DESC", (since,))
-        rows = c.fetchall(); conn.close()
+        c.execute("SELECT * FROM scammers ORDER BY id DESC")
+        all_rows = c.fetchall(); conn.close()
+        cutoff = datetime.now() - timedelta(days=30)
+        rows = []
+        for r in all_rows:
+            try:
+                d = datetime.strptime(r['date'], "%d.%m.%Y %H:%M")
+                if d >= cutoff:
+                    rows.append(r)
+            except Exception:
+                pass
         if not rows:
             await cb.edit_message_text("🔍 За 30 дней: ничего не найдено.")
             return
@@ -1776,7 +1793,28 @@ async def cmd_check(client, message: Message):
     if not row and target.username:
         c.execute("SELECT * FROM scammers WHERE username=?", (target.username,))
         row = c.fetchone()
-    conn.close()
+
+    now = datetime.now().strftime("%d.%m.%Y %H:%M")
+    result = "scammer" if row else "clean"
+    checked_name = f"@{target.username}" if target.username else f"ID:{target.id}"
+    c.execute("INSERT INTO check_history (user_id, checked_username, result, date) VALUES (?,?,?,?)",
+              (user.id, checked_name, result, now))
+
+    if row:
+        c.execute("SELECT user_id FROM user_alerts WHERE target_username=? AND active=1", (target.username or "",))
+        alert_users = c.fetchall()
+        for au in alert_users:
+            try:
+                uid = au["user_id"]
+                u = f"@{row['username']}" if row['username'] else f"ID:{row['user_id']}"
+                await client.send_message(uid,
+                    f"🔔 **ОПОВЕЩЕНИЕ**\n\n"
+                    f"Пользователь {u} проверен и оказывается **СКАМЕРОМ**!\n"
+                    f"📝 {row['reason']}\n📅 {row['date']}")
+            except Exception:
+                pass
+    conn.commit(); conn.close()
+
     if row:
         u = f"@{row['username']}" if row['username'] else f"ID: {row['user_id']}"
 
@@ -2189,7 +2227,7 @@ async def cmd_vote(client, message: Message):
     conn.commit(); conn.close()
 
 
-@app.on_callback_query(filters.regex(r"^vote_(yes|no)_(\d+)$"))
+@app.on_callback_query(filters.regex(r"^vote_(yes|no)_(\d+)$"), group=-1)
 async def handle_vote(client, cb: CallbackQuery):
     data = cb.data.split("_")
     choice = data[1]
@@ -2320,9 +2358,17 @@ async def cmd_search(client, message: Message):
             days = int(query.replace("recent", ""))
         except ValueError:
             days = 7
-        since = (datetime.now() - timedelta(days=days)).strftime("%d.%m.%Y")
-        c.execute("SELECT * FROM scammers WHERE date >= ? ORDER BY id DESC", (since,))
-        rows = c.fetchall()
+        c.execute("SELECT * FROM scammers ORDER BY id DESC")
+        all_rows = c.fetchall()
+        cutoff = datetime.now() - timedelta(days=days)
+        rows = []
+        for r in all_rows:
+            try:
+                d = datetime.strptime(r['date'], "%d.%m.%Y %H:%M")
+                if d >= cutoff:
+                    rows.append(r)
+            except Exception:
+                pass
         header = f"📋 Найдено за {days} дней: {len(rows)}\n\n"
     elif query.startswith("top"):
         try:
@@ -2592,10 +2638,10 @@ async def cmd_warn(client, message: Message):
         uname = message.command[1].lstrip("@")
         conn = get_db()
         c = conn.cursor()
-        c.execute("SELECT user_id FROM scammers WHERE username=?", (uname,))
+        c.execute("SELECT user_id FROM bot_users WHERE username=?", (uname,))
         r = c.fetchone(); conn.close()
         if not r:
-            await message.reply("❌ Не найден."); return
+            await message.reply("❌ Пользователь не найден."); return
         uid = r["user_id"]
 
     conn = get_db()
@@ -2603,12 +2649,16 @@ async def cmd_warn(client, message: Message):
     c.execute("INSERT OR IGNORE INTO user_profiles (user_id) VALUES (?)", (uid,))
     c.execute("UPDATE user_profiles SET warns=warns+1 WHERE user_id=?", (uid,))
     c.execute("SELECT warns FROM user_profiles WHERE user_id=?", (uid,))
-    p = c.fetchone(); conn.close()
+    p = c.fetchone()
     warns = p["warns"] if p else 0
 
     if warns >= 3:
+        c.execute("INSERT OR IGNORE INTO banned (user_id) VALUES (?)", (uid,))
+        c.execute("DELETE FROM user_profiles WHERE user_id=?", (uid,))
+        conn.commit(); conn.close()
         await message.reply(f"🚫 Пользователь {uid} получил 3 преда — заблокирован.")
     else:
+        conn.commit(); conn.close()
         await message.reply(f"⚠️ Пользователь {uid}: пред {warns}/3")
 
 
@@ -3134,7 +3184,7 @@ async def cmd_broadcast(client, message: Message):
     await message.reply(f"📢 **Рассылка завершена!**\n✅ Отправлено: {sent}\n❌ Ошибок: {failed}")
 
 
-@app.on_callback_query(filters.regex(r"^broadcast_(yes|no)$"))
+@app.on_callback_query(filters.regex(r"^broadcast_(yes|no)$"), group=-1)
 async def handle_broadcast_confirm(client, cb: CallbackQuery):
     action = cb.data.split("_")[1]
     if action == "no":
@@ -3195,11 +3245,25 @@ async def group_autoresponder(client, message: Message):
     "accept", "reject", "ban", "unban", "givesub", "rmsub", "premium", "myid",
     "autosetdelay", "autosettext", "setlog", "grouplist", "search", "export",
     "sync", "vote", "broadcast", "info", "base", "alert", "mystats", "myreports",
-    "warn", "tag", "untag", "tags", "mysub", "autosetprivate", "reverse"]))
+    "warn", "tag", "untag", "tags", "mysub", "autosetprivate", "reverse", "activate"]))
 async def handle_state_message(client, message: Message):
     user = message.from_user
     state_info = get_state(user.id)
     if not state_info:
+        if is_admin(user.id, user.username):
+            return
+        conn = get_db(); c = conn.cursor()
+        c.execute("INSERT OR REPLACE INTO bot_users (user_id, username, first_name, last_active, date) VALUES (?,?,?,?,?)",
+            (user.id, user.username or "", user.first_name or "",
+             datetime.now().strftime("%d.%m.%Y %H:%M"), datetime.now().strftime("%d.%m.%Y %H:%M")))
+        conn.commit()
+        c.execute("SELECT * FROM private_autoresponder WHERE id=1")
+        ar = c.fetchone(); conn.close()
+        if ar and ar["enabled"]:
+            delay = ar["delay_seconds"]
+            text_r = ar["response_text"]
+            await asyncio.sleep(delay)
+            await message.reply(text_r)
         return
     state = state_info["state"]
     text = message.text or ""
@@ -3409,39 +3473,6 @@ async def handle_state_message(client, message: Message):
 
     else:
         clear_state(user.id)
-
-
-# ── АВТООТВЕТЧИК ЛИЧНЫЙ ──
-@app.on_message(filters.private & ~filters.command(["start", "check", "report", "addscam", "removescam",
-    "accept", "reject", "ban", "unban", "givesub", "rmsub", "premium", "myid",
-    "autosetdelay", "autosettext", "setlog", "grouplist", "search", "export",
-    "sync", "vote", "broadcast", "info", "base", "alert", "mystats", "myreports",
-    "warn", "tag", "untag", "tags", "mysub", "autosetprivate", "reverse"]))
-async def handle_private_autoresponder(client, message: Message):
-    user = message.from_user
-    if is_admin(user.id, user.username):
-        return
-
-    conn = get_db()
-    c = conn.cursor()
-    c.execute("SELECT * FROM private_autoresponder WHERE id=1")
-    ar = c.fetchone()
-
-    c.execute(
-        "INSERT OR REPLACE INTO bot_users (user_id, username, first_name, last_active, date) VALUES (?,?,?,?,?)",
-        (user.id, user.username or "", user.first_name or "",
-         datetime.now().strftime("%d.%m.%Y %H:%M"),
-         datetime.now().strftime("%d.%m.%Y %H:%M")))
-    conn.commit()
-
-    if ar and ar["enabled"]:
-        delay = ar["delay_seconds"]
-        text = ar["response_text"]
-        conn.close()
-        await asyncio.sleep(delay)
-        await message.reply(text)
-    else:
-        conn.close()
 
 
 @app.on_message(filters.private & filters.command("autosetprivate"))

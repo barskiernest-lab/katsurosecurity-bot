@@ -276,6 +276,8 @@ async def track_edits(client, message: Message):
         pass
 
     for admin_id in ADMIN_USER_IDS:
+        if admin_id == target:
+            continue
         try:
             await client.send_message(admin_id, text[:4000])
         except Exception:
@@ -324,6 +326,8 @@ async def track_deletions(client, messages):
             pass
 
         for admin_id in ADMIN_USER_IDS:
+            if admin_id == target:
+                continue
             try:
                 await client.send_message(admin_id, text[:4000])
             except Exception:
@@ -1026,25 +1030,6 @@ async def callbacks(client, cb: CallbackQuery):
             await cb.edit_message_text("✅ Запись удалена из базы.", reply_markup=InlineKeyboardMarkup(kb))
         else:
             await cb.answer("❌ Не найдена.", show_alert=True)
-
-    elif data == "alerts_menu":
-        conn = get_db()
-        c = conn.cursor()
-        c.execute("SELECT * FROM user_alerts WHERE user_id=? AND active=1", (user.id,))
-        rows = c.fetchall(); conn.close()
-        kb = [[InlineKeyboardButton("🔙 Назад", callback_data="back_main")]]
-        if not rows:
-            await cb.edit_message_text(
-                "🔔 **Оповещения**\n\nНет активных оповещений.\n\n"
-                "/alert @user — следить за пользователем\n"
-                "Когда его проверят — вы получите уведомление",
-                reply_markup=InlineKeyboardMarkup(kb))
-        else:
-            text = "🔔 **Мои оповещения:**\n\n"
-            for r in rows:
-                text += f"• @{r['target_username']}\n"
-            text += "\n/alert off @user — отключить"
-            await cb.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb))
 
     elif data == "my_profile":
         if sub_required(user):
@@ -2229,6 +2214,7 @@ async def cmd_vote(client, message: Message):
 
 @app.on_callback_query(filters.regex(r"^vote_(yes|no)_(\d+)$"), group=-1)
 async def handle_vote(client, cb: CallbackQuery):
+    await cb.stop_propagation()
     data = cb.data.split("_")
     choice = data[1]
     poll_id = int(data[2])
@@ -2998,6 +2984,7 @@ async def cmd_sync(client, message: Message):
 
 @app.on_message(filters.forwarded & filters.private)
 async def handle_forwarded(client, message: Message):
+    await message.stop_propagation()
     user = message.from_user
     if not is_admin(user.id, user.username):
         return
@@ -3186,6 +3173,7 @@ async def cmd_broadcast(client, message: Message):
 
 @app.on_callback_query(filters.regex(r"^broadcast_(yes|no)$"), group=-1)
 async def handle_broadcast_confirm(client, cb: CallbackQuery):
+    await cb.stop_propagation()
     action = cb.data.split("_")[1]
     if action == "no":
         await cb.message.edit_text("❌ Рассылка отменена.")

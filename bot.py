@@ -10,6 +10,8 @@ import logging
 import csv
 import io
 import re
+import string
+import random
 from datetime import datetime, timedelta
 from pyrogram import Client, filters, enums
 from pyrogram.types import (
@@ -225,14 +227,6 @@ def get_group_settings(chat_id):
         row = c.fetchone()
     conn.close()
     return row
-
-
-def update_group_setting(chat_id, key, value):
-    conn = get_db()
-    c = conn.cursor()
-    c.execute(f"UPDATE group_settings SET {key}=? WHERE chat_id=?", (value, chat_id))
-    conn.commit()
-    conn.close()
 
 
 # ── LOG ALL MESSAGES ──
@@ -852,34 +846,43 @@ async def callbacks(client, cb: CallbackQuery):
     elif data == "admin_autoresp":
         conn = get_db()
         c = conn.cursor()
-        c.execute("SELECT * FROM auto_responder WHERE chat_id=?", (user.id,))
-        row = c.fetchone(); conn.close()
-        status = "✅" if row and row['enabled'] else "❌"
-        delay = row['delay_minutes'] if row else 60
-        text_r = row['response_text'] if row else "Автоответ..."
-        kb = [[InlineKeyboardButton("Вкл/Выкл", callback_data="autoresp_toggle")],
-              [InlineKeyboardButton("🔙 Назад", callback_data="admin_panel")]]
+        c.execute("SELECT * FROM group_settings")
+        groups = c.fetchall(); conn.close()
+        if not groups:
+            kb = [[InlineKeyboardButton("🔙 Назад", callback_data="admin_panel")]]
+            await cb.edit_message_text("🤖 **Автоответчик**\n\nНет групп.", reply_markup=InlineKeyboardMarkup(kb)); return
+        kb = []
+        for g in groups:
+            title = g['chat_title'] or str(g['chat_id'])
+            ar_conn = get_db()
+            ar_c = ar_conn.cursor()
+            ar_c.execute("SELECT enabled FROM auto_responder WHERE chat_id=?", (g['chat_id'],))
+            ar = ar_c.fetchone(); ar_conn.close()
+            status = "✅" if ar and ar['enabled'] else "❌"
+            label = f"🤖 {title} ({status})"
+            kb.append([InlineKeyboardButton(label, callback_data=f"autoresp_toggle_{g['chat_id']}")])
+        kb.append([InlineKeyboardButton("🔙 Назад", callback_data="admin_panel")])
         await cb.edit_message_text(
-            f"🤖 **Автоответчик**\n\n"
-            f"Статус: {status}\nЗадержка: {delay} мин\nТекст: {text_r}\n\n"
-            f"⚠️ Для работы нужен **Telegram Business** в настройках бота.\n"
-            f"Включи: @BotFather → /mybots → Bot Settings → Telegram Business\n\n"
-            f"Настройка:\n"
-            f"/autosetdelay 60\n/autosettext текст",
+            "🤖 **Автоответчик групп**\n\n"
+            "Выберите группу для настройки:\n"
+            "Включить/выключить: `/autosetdelay` и `/autosettext`",
             reply_markup=InlineKeyboardMarkup(kb))
 
-    elif data == "autoresp_toggle":
+    elif data.startswith("autoresp_toggle_"):
+        chat_id = int(data.replace("autoresp_toggle_", ""))
         conn = get_db()
         c = conn.cursor()
-        c.execute("SELECT * FROM auto_responder WHERE chat_id=?", (user.id,))
+        c.execute("SELECT * FROM auto_responder WHERE chat_id=?", (chat_id,))
         row = c.fetchone()
         new_state = 0 if (row and row['enabled']) else 1
         if row:
-            c.execute("UPDATE auto_responder SET enabled=? WHERE chat_id=?", (new_state, user.id))
+            c.execute("UPDATE auto_responder SET enabled=? WHERE chat_id=?", (new_state, chat_id))
         else:
-            c.execute("INSERT INTO auto_responder (chat_id, enabled) VALUES (?,?)", (user.id, new_state))
+            c.execute("INSERT INTO auto_responder (chat_id, enabled) VALUES (?,?)", (chat_id, new_state))
         conn.commit(); conn.close()
-        await cb.edit_message_text(f"🤖 Автоответчик {'вкл' if new_state else 'выкл'}.")
+        await cb.answer(f"Автоответчик {'вкл' if new_state else 'выкл'} для {chat_id}")
+        kb = [[InlineKeyboardButton("🔙 Назад", callback_data="admin_autoresp")]]
+        await cb.edit_message_text(f"🤖 Автоответчик для `{chat_id}` {'ВКЛ' if new_state else 'ВЫКЛ'}.", reply_markup=InlineKeyboardMarkup(kb))
 
     elif data == "admin_groups":
         conn = get_db()
@@ -947,7 +950,6 @@ async def callbacks(client, cb: CallbackQuery):
 
     elif data.startswith("promo_dur_"):
         days = int(data.replace("promo_dur_", ""))
-        import string, random
         code = ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
         conn = get_db(); c = conn.cursor()
         c.execute("INSERT INTO promo_codes (code, days, created_by, date) VALUES (?,?,?,?)",
@@ -2869,9 +2871,6 @@ CHANNEL_IDS = {
     "SCAMB_MN_BOT": 8782912630,
 }
 
-
-KNOWN_BOTS = {"SCAMB_MN_BOT", "ScamB_MN_proof", "GG_chawq_bot", "KATSUROSECURITI"}
-
 def parse_scammer_from_text(text, source="unknown"):
     results = []
     if not text:
@@ -3347,42 +3346,6 @@ async def handle_state_message(client, message: Message):
         else:
             await message.reply(f"❌ @{uname} не найден в базе.", reply_markup=InlineKeyboardMarkup(kb))
 
-    elif state == "accept_id":
-        clear_state(user.id)
-        if not text.isdigit():
-            await message.reply("❌ Введите числовой ID жалобы"); return
-        cid = int(text)
-        conn = get_db(); c = conn.cursor()
-        c.execute("SELECT * FROM complaints WHERE id=? AND status='pending'", (cid,))
-        comp = c.fetchone()
-        if not comp:
-            conn.close(); await message.reply("❌ Жалоба не найдена или уже обработана."); return
-        uname = comp['target_username']
-        c.execute("UPDATE complaints SET status='accepted' WHERE id=?", (cid,))
-        if uname:
-            c.execute("SELECT * FROM scammers WHERE username=?", (uname,))
-            if not c.fetchone():
-                c.execute("INSERT INTO scammers (user_id, username, first_name, reason, added_by, added_by_name, date) VALUES (?,?,?,?,?,?,?)",
-                          (comp['target_user_id'] or 0, uname, comp['target_name'] or "", comp['reason'],
-                           comp['reporter_id'], comp['reporter_name'], datetime.now().strftime("%d.%m.%Y %H:%M")))
-        conn.commit(); conn.close()
-        kb = [[InlineKeyboardButton("🔙 Назад", callback_data="admin_panel")]]
-        await message.reply(f"✅ Жалоба #{cid} одобрена. @{uname} добавлен в базу.", reply_markup=InlineKeyboardMarkup(kb))
-
-    elif state == "reject_id":
-        clear_state(user.id)
-        if not text.isdigit():
-            await message.reply("❌ Введите числовой ID жалобы"); return
-        cid = int(text)
-        conn = get_db(); c = conn.cursor()
-        c.execute("UPDATE complaints SET status='rejected' WHERE id=? AND status='pending'", (cid,))
-        d = c.rowcount; conn.commit(); conn.close()
-        kb = [[InlineKeyboardButton("🔙 Назад", callback_data="admin_panel")]]
-        if d:
-            await message.reply(f"✅ Жалоба #{cid} отклонена.", reply_markup=InlineKeyboardMarkup(kb))
-        else:
-            await message.reply("❌ Жалоба не найдена.", reply_markup=InlineKeyboardMarkup(kb))
-
     elif state == "ban_user":
         clear_state(user.id)
         uname = text.lstrip("@").strip()
@@ -3499,20 +3462,6 @@ async def handle_state_message(client, message: Message):
                       "проверенный": "🟢", "чисто": "🟢", "под подозрением": "🟡"}
         emoji = tag_emojis.get(tag, "⚪")
         await message.reply(f"{emoji} Метка «{tag}» поставлена @{uname}.", reply_markup=InlineKeyboardMarkup(kb))
-
-    elif state == "untag_user":
-        uname = text.lstrip("@").strip()
-        clear_state(user.id)
-        if not uname:
-            await message.reply("❌ Введите @username"); return
-        conn = get_db(); c = conn.cursor()
-        c.execute("DELETE FROM user_tags WHERE target_username=?", (uname,))
-        d = c.rowcount; conn.commit(); conn.close()
-        kb = [[InlineKeyboardButton("🔙 Назад", callback_data="admin_tags")]]
-        if d:
-            await message.reply(f"🗑 Все метки @{uname} удалены.", reply_markup=InlineKeyboardMarkup(kb))
-        else:
-            await message.reply(f"❌ У @{uname} нет меток.", reply_markup=InlineKeyboardMarkup(kb))
 
     elif state == "user_check":
         clear_state(user.id)
